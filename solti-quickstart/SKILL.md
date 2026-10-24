@@ -22,8 +22,7 @@ connections, first job) is bootstrapped here.
 ## Execution Flow
 
 ### Step 0: CLI Bootstrap
-Check `solti --version`. If missing, install via Homebrew (the only
-distribution channel — there is no npm/PyPI package) and re-check:
+Check `solti --version`. If missing, install via Homebrew and re-check:
 
 ```bash
 brew install trysolti/tap/solti
