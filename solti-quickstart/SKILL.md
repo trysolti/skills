@@ -58,9 +58,56 @@ AWS accounts, GCP projects, Azure subscriptions, plus any specific storage
 buckets or container registries. Do not assume or silently create cloud-side
 resources.
 
-**3b. Wire up connections.** For each resource, use the corresponding cloud
-CLI (checking availability/auth first) to obtain credentials, then register
-with the Solti CLI:
+**3b. Wire up connections.** For each resource, offer the two auth methods —
+**WIF (recommended)** and **static (legacy)**. WIF shares no cloud secrets
+with Solti: the user registers Solti as an OIDC trust in their own cloud
+account, and Solti mints short-lived (10-minute), job-scoped tokens per run.
+Ask the user which method; default to WIF when their cloud CLI is available.
+
+**3b-WIF (recommended).** For each cloud, run the trust registration with the
+cloud CLI (checking availability/auth first), then register the WIF
+connection with the Solti API (the CLI's `connection create` predates WIF —
+use `curl` with an API key against `https://api.solti.run/1/connections`,
+body: `{"name": <name>, "type": <type>, "auth_method": "wif", ...trust fields}`):
+
+- **AWS**:
+  ```bash
+  # 1. Trust Solti's OIDC issuer
+  aws iam create-open-id-connect-provider --url https://api.solti.run     --client-id-list solti-job --thumbprint-list <thumbprint-of-api.solti.run-cert>
+  # 2. Create the job role (scope trust to your org/project via sub)
+  aws iam create-role --role-name solti-wif --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{"Effect": "Allow", "Principal": {"Federated": "<oidc-provider-arn>"},
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {"StringEquals": {"api.solti.run:aud": "solti-job"}}}]}'
+  # 3. Attach the policies the workloads need (S3, ECR pull, ...)
+  # 4. Register the connection
+  curl -X POST https://api.solti.run/1/connections -H "X-Solti-API-Key: <key>" \
+    -H "X-Solti-Project-Id: <project>" -H "Content-Type: application/json" \
+    -d '{"name": "<name>", "type": "aws", "auth_method": "wif", "aws_role_arn": "<role-arn>"}'
+  ```
+- **GCP**:
+  ```bash
+  gcloud iam workload-identity-pools create solti-pool --location=global
+  gcloud iam workload-identity-pools providers create-oidc solti-provider \
+    --location=global --workload-identity-pool=solti-pool \
+    --issuer-uri="https://api.solti.run" \
+    --attribute-mapping="google.subject=assertion.sub"
+  # Bind the workload identity to a service account, then:
+  curl -X POST https://api.solti.run/1/connections ... \
+    -d '{"name": "<name>", "type": "gcp", "auth_method": "wif", "gcp_audience": "<pool-provider-audience>", "gcp_service_account_email": "<sa>"}'
+  ```
+- **Azure**:
+  ```bash
+  az ad app create --display-name solti-wif
+  az ad app federated-credential create --id <app-object-id> --parameters \
+    '{"name": "solti", "issuer": "https://api.solti.run", "subject": "<org-project-subject>", "audiences": ["api://<client-id>"]}'
+  curl -X POST https://api.solti.run/1/connections ... \
+    -d '{"name": "<name>", "type": "azure", "auth_method": "wif", "azure_tenant_id": "<tenant>", "azure_client_id": "<app-id>"}'
+  ```
+
+**3b-static (fallback).** When the user prefers static credentials or the
+cloud CLI is unavailable:
 
 - **AWS**: `solti connection create --name <name> --type aws --access-key <key> --secret-key <secret>`
 - **GCP**: `solti connection create --name <name> --type gcp --project-id <project> --keyfile <key.json>`
